@@ -1,0 +1,30 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+contract LoanContract {
+    address public lender;
+    mapping(address => uint) public loans;
+
+    constructor() {
+        lender = msg.sender;
+    }
+
+    event LoanRequested(address indexed borrower, uint amount);
+    event LoanFunded(address indexed borrower, uint amount);
+
+    function requestLoan(uint amount) public {
+        emit LoanRequested(msg.sender, amount);
+    }
+
+    function fundLoan(address borrower) public payable {
+        require(msg.sender == lender, "Only lender can fund loans");
+        require(msg.value > 0, "Must send ETH to fund loan");
+        loans[borrower] += msg.value;
+        payable(borrower).transfer(msg.value);
+        emit LoanFunded(borrower, msg.value);
+    }
+
+    function getLoanAmount(address borrower) public view returns (uint) {
+        return loans[borrower];
+    }
+}

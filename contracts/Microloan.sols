@@ -1,0 +1,189 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.19;
+
+contract MicroloanBank {
+    address public owner;
+    uint256 public loanCounter;
+    uint256 public constant MIN_REPUTATION = 50;
+    uint256 public constant MAX_REPUTATION = 100;
+    uint256 public constant REPUTATION_INCREASE = 10;
+    uint256 public constant REPUTATION_DECREASE = 20;
+    uint256 public constant DEFAULT_REPUTATION = 70;
+    uint256 public constant LOAN_DURATION = 30 days;
+
+    enum LoanStatus {
+        Requested,
+        Approved,
+        Funded,
+        Repaid,
+        Defaulted
+    }
+
+    struct Loan {
+        uint256 id;
+        address borrower;
+        address lender;
+        uint256 amount;
+        uint256 dueDate;
+        LoanStatus status;
+        bool exists;
+    }
+
+    mapping(uint256 => Loan) public loans;
+    mapping(address => uint256) public borrowerReputation;
+    mapping(address => uint256[]) public borrowerLoans;
+    mapping(address => uint256[]) public lenderLoans;
+
+    event LoanRequested(uint256 indexed loanId, address indexed borrower, uint256 amount);
+    event LoanApproved(uint256 indexed loanId);
+    event LoanFunded(uint256 indexed loanId, address indexed lender);
+    event LoanRepaid(uint256 indexed loanId, address indexed borrower);
+    event LoanDefaulted(uint256 indexed loanId, address indexed borrower);
+    event ReputationUpdated(address indexed borrower, uint256 newReputation);
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner can perform this action");
+        _;
+    }
+
+    modifier loanExists(uint256 _loanId) {
+        require(loans[_loanId].exists, "Loan does not exist");
+        _;
+    }
+
+    constructor() {
+        owner = msg.sender;
+        loanCounter = 0;
+    }
+
+    function requestLoan(uint256 _amount) external returns (uint256) {
+        require(_amount > 0, "Loan amount must be greater than 0");
+        
+        // Initialize reputation if new borrower
+        if (borrowerReputation[msg.sender] == 0) {
+            borrowerReputation[msg.sender] = DEFAULT_REPUTATION;
+        }
+        
+        loanCounter++;
+        uint256 loanId = loanCounter;
+        
+        loans[loanId] = Loan({
+            id: loanId,
+            borrower: msg.sender,
+            lender: address(0),
+            amount: _amount,
+            dueDate: 0,
+            status: LoanStatus.Requested,
+            exists: true
+        });
+        
+        borrowerLoans[msg.sender].push(loanId);
+        
+        emit LoanRequested(loanId, msg.sender, _amount);
+        
+        // Auto-approve if reputation is sufficient
+        if (borrowerReputation[msg.sender] >= MIN_REPUTATION) {
+            loans[loanId].status = LoanStatus.Approved;
+            emit LoanApproved(loanId);
+        }
+        
+        return loanId;
+    }
+
+    function fundLoan(uint256 _loanId) external payable loanExists(_loanId) {
+        Loan storage loan = loans[_loanId];
+        require(loan.status == LoanStatus.Approved, "Loan must be approved");
+        require(msg.value == loan.amount, "Must send exact loan amount");
+        require(msg.sender != loan.borrower, "Cannot fund your own loan");
+        
+        loan.lender = msg.sender;
+        loan.status = LoanStatus.Funded;
+        loan.dueDate = block.timestamp + LOAN_DURATION;
+        
+        lenderLoans[msg.sender].push(_loanId);
+        
+        // Transfer funds to borrower
+        payable(loan.borrower).transfer(msg.value);
+        
+        emit LoanFunded(_loanId, msg.sender);
+    }
+
+    function repayLoan(uint256 _loanId) external payable loanExists(_loanId) {
+        Loan storage loan = loans[_loanId];
+        require(msg.sender == loan.borrower, "Only borrower can repay");
+        require(loan.status == LoanStatus.Funded, "Loan must be funded");
+        require(msg.value == loan.amount, "Must repay full amount");
+        
+        loan.status = LoanStatus.Repaid;
+        
+        // Transfer funds to lender
+        payable(loan.lender).transfer(msg.value);
+        
+        // Update reputation
+        _updateReputation(msg.sender, true);
+        
+        emit LoanRepaid(_loanId, msg.sender);
+    }
+
+    function checkAndDefaultLoans() external {
+        // This function can be called by anyone to check for defaulted loans
+        for (uint256 i = 1; i <= loanCounter; i++) {
+            Loan storage loan = loans[i];
+            if (loan.status == LoanStatus.Funded && 
+                block.timestamp > loan.dueDate) {
+                loan.status = LoanStatus.Defaulted;
+                _updateReputation(loan.borrower, false);
+                emit LoanDefaulted(i, loan.borrower);
+            }
+        }
+    }
+
+    function _updateReputation(address _borrower, bool _increase) private {
+        uint256 currentRep = borrowerReputation[_borrower];
+        
+        if (_increase) {
+            currentRep = currentRep + REPUTATION_INCREASE > MAX_REPUTATION 
+                ? MAX_REPUTATION 
+                : currentRep + REPUTATION_INCREASE;
+        } else {
+            currentRep = currentRep < REPUTATION_DECREASE 
+                ? 0 
+                : currentRep - REPUTATION_DECREASE;
+        }
+        
+        borrowerReputation[_borrower] = currentRep;
+        emit ReputationUpdated(_borrower, currentRep);
+    }
+
+    function getLoanDetails(uint256 _loanId) external view loanExists(_loanId) 
+        returns (
+            address borrower,
+            address lender,
+            uint256 amount,
+            uint256 dueDate,
+            LoanStatus status
+        ) {
+        Loan memory loan = loans[_loanId];
+        return (
+            loan.borrower,
+            loan.lender,
+            loan.amount,
+            loan.dueDate,
+            loan.status
+        );
+    }
+
+    function getBorrowerLoans(address _borrower) external view returns (uint256[] memory) {
+        return borrowerLoans[_borrower];
+    }
+
+    function getLenderLoans(address _lender) external view returns (uint256[] memory) {
+        return lenderLoans[_lender];
+    }
+
+    function approveLoan(uint256 _loanId) external onlyOwner loanExists(_loanId) {
+        require(loans[_loanId].status == LoanStatus.Requested, "Loan must be in requested status");
+        loans[_loanId].status = LoanStatus.Approved;
+        emit LoanApproved(_loanId);
+    }
+}
