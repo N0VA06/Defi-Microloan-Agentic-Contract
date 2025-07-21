@@ -11,5 +11,9 @@
   "description": "",
   "devDependencies": {
     "@nomicfoundation/hardhat-toolbox": "^6.0.0"
+  },
+  "dependencies": {
+    "@dfinity/agent": "^3.0.0",
+    "@dfinity/auth-client": "^3.0.0"
   }
 }
